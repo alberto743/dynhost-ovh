@@ -1,30 +1,42 @@
-#!/usr/bin/env sh
+#!/bin/sh
+set -e -u
 
 # Account configuration
-HOST=DOMAINE_NAME
-LOGIN=LOGIN
-PASSWORD=PASSWORD
-DNSSERVER=@dns102.ovh.net
+ovhdyn_host=DOMAINE_NAME
+ovhdyn_usr=LOGIN
+ovhdyn_pwd=PASSWORD
+localip=false
 
-PATH_LOG=/var/log/dynhostovh.log
+# Variables
+log_file=/var/log/dynhostovh.log
 
-# Get current IPv4 and corresponding configured
-HOST_IP=$(dig $DNSSERVER +short $HOST A)
-CURRENT_IP=$(curl -m 5 -4 ifconfig.co 2>/dev/null)
-if [ -z $CURRENT_IP ]
+# Local IP
+default_gateway=$(ip --json route | jq -r '.[] | select(.dst == "default") | .gateway')
+ip_local=$(ip --json route get $default_gateway | jq -r '.[] | .prefsrc? // empty')
+
+# External IP
+ip_external=$(curl --silent --max-time 5 https://ifconfig.me/ip)
+
+# Desired IP
+if $localip
 then
-  CURRENT_IP=$(dig +short myip.opendns.com @resolver1.opendns.com)
+  ip_toset=$ip_local
+else
+  ip_toset=$ip_external
 fi
-CURRENT_DATETIME=$(date -R)
+
+# Date & Time
+datetime_current=$(date --utc --iso-8601=seconds)
+
+# Current IP
+ip_current=$(dig +short $ovhdyn_host)
 
 # Update dynamic IPv4, if needed
-if [ -z $CURRENT_IP ] || [ -z $HOST_IP ]
+if [ -z "$ip_current" ] || [ -z "$ip_toset" ]
 then
-  echo "[$CURRENT_DATETIME]: No IP retrieved" >> $PATH_LOG
-else
-  if [ "$HOST_IP" != "$CURRENT_IP" ]
-  then
-    RES=$(curl -m 5 -L --location-trusted --user "$LOGIN:$PASSWORD" "https://www.ovh.com/nic/update?system=dyndns&hostname=$HOST&myip=$CURRENT_IP")
-    echo "[$CURRENT_DATETIME]: IPv4 has changed - request to OVH DynHost: $RES" >> $PATH_LOG
-  fi
+  echo "[$datetime_current]: No IP retrieved" >> $log_file
+elif [ "$ip_current" != "$ip_toset" ]
+then
+  answer=$(curl --silent --max-time 5 --location --location-trusted --user "$ovhdyn_usr:$ovhdyn_pwd" "https://www.ovh.com/nic/update?system=dyndns&hostname=$ovhdyn_host&myip=$ip_toset")
+  echo "[$datetime_current]: Request to OVH DynHost: $answer" >> $log_file
 fi
